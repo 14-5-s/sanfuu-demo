@@ -1,0 +1,1342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>三福好物集结闯关计划</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'sanfu-pink': '#FF4D88',
+                        'sanfu-yellow': '#FFD124',
+                        'sanfu-bg': '#F9F9F9',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        * { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+        @keyframes sparkle { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.5) drop-shadow(0 0 10px gold); } }
+        @keyframes flipIn { from { transform: rotateY(90deg); } to { transform: rotateY(0deg); } }
+        @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes bounceIn { 0% { transform: scale(0.5); opacity: 0; } 50% { transform: scale(1.05); } 100% { transform: scale(1); opacity: 1; } }
+        .fade-in { animation: fadeIn 0.5s ease-out forwards; }
+        .pulse { animation: pulse 0.3s ease-in-out; }
+        .shake { animation: shake 0.3s ease-in-out; }
+        .sparkle { animation: sparkle 0.5s ease-in-out; }
+        .flip-card { perspective: 1000px; }
+        .flip-card-inner { transition: transform 0.5s; transform-style: preserve-3d; }
+        .flip-card.flipped .flip-card-inner { transform: rotateY(180deg); }
+        .flip-card-front, .flip-card-back { backface-visibility: hidden; position: absolute; width: 100%; height: 100%; border-radius: 0.75rem; }
+        .flip-card-back { transform: rotateY(180deg); }
+        .btn-glow { box-shadow: 0 4px 15px rgba(255, 77, 136, 0.4); transition: all 0.3s ease; }
+        .btn-glow:hover { box-shadow: 0 6px 20px rgba(255, 77, 136, 0.6); transform: translateY(-2px); }
+        .card-shadow { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
+        .card-shadow:hover { box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15); }
+        .locked { opacity: 0.5; cursor: not-allowed; }
+        .progress-ring { transform: rotate(-90deg); }
+        .progress-ring-circle { transition: stroke-dashoffset 0.3s; }
+        .animate-bounce-in { animation: bounceIn 0.5s ease-out forwards; }
+    </style>
+</head>
+<body class="bg-santu-bg min-h-screen">
+    <div id="app" class="max-w-md mx-auto min-h-screen relative overflow-hidden"></div>
+
+    <script>
+        // 音效管理器
+        const AudioManager = (function() {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            
+            function playTone(frequency, duration, type = 'sine', volume = 0.1) {
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                
+                oscillator.type = type;
+                oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+                
+                gainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
+                
+                oscillator.start(audioContext.currentTime);
+                oscillator.stop(audioContext.currentTime + duration);
+            }
+            
+            return {
+                click: function() {
+                    playTone(800, 0.05, 'sine', 0.08);
+                },
+                success: function() {
+                    playTone(523, 0.1, 'sine', 0.1);
+                    setTimeout(() => playTone(659, 0.1, 'sine', 0.1), 100);
+                    setTimeout(() => playTone(784, 0.15, 'sine', 0.1), 200);
+                },
+                fail: function() {
+                    playTone(200, 0.2, 'sawtooth', 0.05);
+                },
+                collect: function() {
+                    playTone(1000, 0.08, 'sine', 0.06);
+                    setTimeout(() => playTone(1200, 0.08, 'sine', 0.06), 60);
+                },
+                drop: function() {
+                    playTone(400, 0.1, 'sine', 0.05);
+                },
+                complete: function() {
+                    const notes = [523, 659, 784, 1047];
+                    notes.forEach((note, i) => {
+                        setTimeout(() => playTone(note, 0.2, 'sine', 0.08), i * 150);
+                    });
+                }
+            };
+        })();
+
+        // 录屏管理器
+        const ScreenRecorder = (function() {
+            let recorder = null;
+            let stream = null;
+            let chunks = [];
+            let isRecording = false;
+            
+            async function startRecording() {
+                try {
+                    stream = await navigator.mediaDevices.getDisplayMedia({
+                        video: {
+                            displaySurface: 'browser',
+                            logicalSurface: true,
+                            cursor: 'always'
+                        },
+                        audio: true
+                    });
+                    
+                    const videoTrack = stream.getVideoTracks()[0];
+                    videoTrack.applyConstraints({
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 },
+                        frameRate: { ideal: 30 }
+                    });
+                    
+                    recorder = new MediaRecorder(stream, {
+                        mimeType: 'video/webm;codecs=vp9',
+                        videoBitsPerSecond: 10000000
+                    });
+                    
+                    recorder.ondataavailable = function(e) {
+                        if (e.data.size > 0) {
+                            chunks.push(e.data);
+                        }
+                    };
+                    
+                    recorder.onstop = function() {
+                        const blob = new Blob(chunks, { type: 'video/webm' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `三福游戏录屏_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        chunks = [];
+                    };
+                    
+                    recorder.start();
+                    isRecording = true;
+                    updateRecordButton();
+                } catch (err) {
+                    console.error('录屏启动失败:', err);
+                    alert('录屏权限被拒绝或浏览器不支持，请使用Chrome或Edge浏览器');
+                }
+            }
+            
+            function stopRecording() {
+                if (recorder && isRecording) {
+                    recorder.stop();
+                    stream.getTracks().forEach(track => track.stop());
+                    isRecording = false;
+                    updateRecordButton();
+                }
+            }
+            
+            function updateRecordButton() {
+                const btn = document.getElementById('recordBtn');
+                if (btn) {
+                    if (isRecording) {
+                        btn.innerHTML = '<span>⏹️</span><span>结束录屏</span>';
+                        btn.className = 'px-4 py-2 rounded-full bg-red-500 text-white font-medium text-sm flex items-center gap-2 hover:bg-red-600 transition-colors animate-pulse';
+                    } else {
+                        btn.innerHTML = '<span>📹</span><span>开始录屏</span>';
+                        btn.className = 'px-4 py-2 rounded-full bg-santu-pink/10 text-santu-pink font-medium text-sm flex items-center gap-2 hover:bg-santu-pink/20 transition-colors';
+                    }
+                }
+            }
+            
+            return {
+                toggle: function() {
+                    if (isRecording) {
+                        stopRecording();
+                    } else {
+                        startRecording();
+                    }
+                },
+                isRecording: function() {
+                    return isRecording;
+                }
+            };
+        })();
+
+        function toggleRecording() {
+            ScreenRecorder.toggle();
+        }
+
+        // 游戏状态管理
+        const gameState = {
+            currentLevel: 0,
+            levelUnlocked: [true, true, false, false, false],
+            scores: [0, 0, 0, 0],
+            totalScore: 0,
+            grade: 'C',
+            couponCode: ''
+        };
+
+        // 关卡数据
+        const levels = [
+            { name: '潮玩盲盒点点乐', icon: '🎁', desc: '7秒限时点击盲盒' },
+            { name: '百货物件分类收纳', icon: '🗂️', desc: '拖拽归类解压收纳' },
+            { name: '好物记忆翻翻卡', icon: '🃏', desc: '配对消除种草好物' },
+            { name: '礼品礼盒拼装拼图', icon: '🧩', desc: '拼装礼盒喜迎好礼' }
+        ];
+
+        // 路由控制
+        function navigate(hash) {
+            window.location.hash = hash;
+        }
+
+        // 渲染首页
+        function renderHome() {
+            const app = document.getElementById('app');
+            app.innerHTML = `
+                <div class="min-h-screen flex flex-col px-4 py-6 fade-in">
+                    <!-- 顶部工具栏 -->
+                    <div class="flex justify-end mb-4">
+                        <button id="recordBtn" onclick="toggleRecording()" 
+                                class="px-4 py-2 rounded-full bg-santu-pink/10 text-santu-pink font-medium text-sm flex items-center gap-2 hover:bg-santu-pink/20 transition-colors">
+                            <span>📹</span>
+                            <span>开始录屏</span>
+                        </button>
+                    </div>
+
+                    <!-- Logo区域 -->
+                    <div class="text-center mb-6">
+                        <div class="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-santu-pink to-pink-400 mb-4 overflow-hidden">
+                            <img src="logo.png" class="w-full h-full object-contain p-2" />
+                        </div>
+                        <div class="text-santu-pink font-bold text-lg tracking-wider">SANFU 三福</div>
+                    </div>
+
+                    <!-- 标题区域 -->
+                    <div class="text-center mb-8">
+                        <h1 class="text-3xl font-bold text-gray-800 mb-2">好物集结闯关计划</h1>
+                        <p class="text-santu-yellow font-medium">来三福解锁趣味小游戏，赢专属福利</p>
+                    </div>
+
+                    <!-- 关卡按钮组 -->
+                    <div class="flex-1 space-y-3 mb-6">
+                        ${levels.map((level, i) => `
+                            <button onclick="startLevel(${i + 1})"
+                                class="w-full py-4 px-4 rounded-2xl flex items-center gap-4 transition-all duration-300 card-shadow
+                                ${gameState.levelUnlocked[i + 1]
+                                    ? 'bg-white border-2 border-santu-pink hover:bg-pink-50 active:scale-98'
+                                    : 'bg-gray-200 border-2 border-gray-300 locked'}">
+                                <div class="w-12 h-12 rounded-xl flex items-center justify-center text-2xl
+                                    ${gameState.levelUnlocked[i + 1] ? 'bg-santu-pink/10' : 'bg-gray-300'}">
+                                    ${gameState.levelUnlocked[i + 1] ? level.icon : '🔒'}
+                                </div>
+                                <div class="flex-1 text-left">
+                                    <div class="font-semibold ${gameState.levelUnlocked[i + 1] ? 'text-gray-800' : 'text-gray-500'}">
+                                        第${i + 1}关 ${level.name}
+                                    </div>
+                                    <div class="text-sm ${gameState.levelUnlocked[i + 1] ? 'text-gray-500' : 'text-gray-400'}">
+                                        ${gameState.levelUnlocked[i + 1] ? level.desc : '尚未解锁'}
+                                    </div>
+                                </div>
+                                ${gameState.scores[i] > 0 ? `
+                                    <div class="px-3 py-1 rounded-full bg-santu-yellow/20 text-santu-yellow font-bold text-sm">
+                                        +${gameState.scores[i]}
+                                    </div>
+                                ` : ''}
+                            </button>
+                        `).join('')}
+                    </div>
+
+                    <!-- 开始按钮 -->
+                    <button onclick="startLevel(1)" class="w-full py-4 rounded-2xl bg-gradient-to-r from-santu-pink to-pink-500 text-white font-bold text-lg btn-glow">
+                        开始闯关 →
+                    </button>
+
+                    <!-- 底部提示 -->
+                    <div class="text-center mt-4 text-gray-400 text-xs">
+                        闯关领取线下门店优惠券，可分享好友参与
+                    </div>
+                </div>
+            `;
+        }
+
+        // 开始关卡
+        function startLevel(level) {
+            if (!gameState.levelUnlocked[level]) return;
+            gameState.currentLevel = level;
+            navigate('#level' + level);
+        }
+
+        // 渲染关卡1：潮玩盲盒点点乐
+        function renderLevel1() {
+            const app = document.getElementById('app');
+            let timeLeft = 5;
+            let score = 0;
+            let timer;
+            let gameEnded = false;
+
+            // wanou图片素材列表
+            const ipImages = ['wanou1.jpg', 'wanou2.jpg', 'wanou3.jpg', 'wanou4.jpg', 'wanou5.jpg', 'wanou6.jpg', 'wanou7.jpg', 'wanou8.jpg', 'wanou9.jpg', 'wanou10.jpg'];
+            
+            // 生成盲盒数据：普通款、隐藏款、空白
+            const blindBoxes = [];
+            const boxTypes = ['normal', 'normal', 'normal', 'hidden', 'normal', 'empty', 'normal', 'hidden', 'normal', 'empty', 'normal', 'normal'];
+
+            // 随机打乱
+            for (let i = boxTypes.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [boxTypes[i], boxTypes[j]] = [boxTypes[j], boxTypes[i]];
+            }
+
+            boxTypes.forEach((type, i) => {
+                const image = ipImages[i % ipImages.length];
+                blindBoxes.push({ id: i, type, image, clicked: false });
+            });
+
+            function render() {
+                const clickedCount = blindBoxes.filter(b => b.clicked).length;
+                const remaining = blindBoxes.filter(b => !b.clicked).length;
+
+                app.innerHTML = `
+                    <div class="min-h-screen flex flex-col fade-in">
+                        <!-- 顶部状态栏 -->
+                        <div class="flex items-center justify-between px-4 py-3 bg-white/80 backdrop-blur sticky top-0 z-10">
+                            <button onclick="backToHome()" class="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
+                                <span class="text-gray-600">←</span>
+                            </button>
+                            <div class="text-center">
+                                <div class="text-sm text-gray-500">第1关</div>
+                                <div class="font-bold text-santu-pink">潮玩盲盒点点乐</div>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-2xl font-bold text-santu-yellow">${score}</div>
+                                <div class="text-xs text-gray-500">积分</div>
+                            </div>
+                        </div>
+
+                        <!-- 倒计时 -->
+                        <div class="px-4 py-2">
+                            <div class="flex items-center gap-3">
+                                <div class="flex-1 h-4 bg-gray-200 rounded-full overflow-hidden shadow-inner">
+                                    <div id="timerBar" class="h-full bg-gradient-to-r from-santu-yellow via-yellow-400 to-santu-pink transition-all duration-300 ease-linear" style="width: ${(timeLeft / 5) * 100}%; border-radius: 9999px;"></div>
+                                </div>
+                                <div id="timerText" class="text-lg font-bold text-santu-yellow w-12 text-center">${timeLeft}s</div>
+                            </div>
+                        </div>
+
+                        <!-- 盲盒货架 -->
+                        <div class="flex-1 px-4 pb-4">
+                            <div class="text-center text-gray-500 text-sm mb-3">点击盲盒收集惊喜，避开空白货架！</div>
+                            <div class="grid grid-cols-4 gap-2">
+                                ${blindBoxes.map((box, i) => `
+                                    <div id="box_${i}" onclick="clickBoxLevel1(${i})"
+                                        class="aspect-square rounded-xl flex items-center justify-center transition-all duration-200 overflow-hidden
+                                        ${box.clicked
+                                            ? (box.type === 'empty' ? 'bg-gray-200' : 'bg-santu-pink/10')
+                                            : (box.type === 'empty'
+                                                ? 'bg-gray-100 border-2 border-dashed border-gray-300 cursor-pointer hover:bg-gray-150'
+                                                : (box.type === 'hidden'
+                                                    ? 'bg-gradient-to-br from-yellow-200 to-yellow-400 cursor-pointer hover:scale-105 sparkle'
+                                                    : 'bg-pink-50 border-2 border-santu-pink/30 cursor-pointer hover:scale-105 hover:border-santu-pink'))}">
+                                        ${box.clicked ? (box.type !== 'empty' ? `<img src="${box.image}" class="w-full h-full object-contain p-1" />` : '') : (box.type === 'empty' ? '' : `<img src="lipindai.jpg" class="w-full h-full object-contain p-1" />`)}
+                                    </div>
+                                `).join('')}
+                            </div>
+                            
+                        </div>
+                    </div>
+                `;
+            }
+
+            window.clickBoxLevel1 = function(index) {
+                if (gameEnded || blindBoxes[index].clicked) return;
+
+                AudioManager.click();
+                
+                blindBoxes[index].clicked = true;
+                const box = blindBoxes[index];
+
+                if (box.type === 'empty') {
+                    AudioManager.fail();
+                    timeLeft = Math.max(0, timeLeft - 5);
+                    score = Math.max(0, score - 5);
+                } else if (box.type === 'hidden') {
+                    AudioManager.success();
+                    score += 20;
+                } else {
+                    AudioManager.collect();
+                    score += 10;
+                }
+
+                const boxEl = document.getElementById(`box_${index}`);
+                if (boxEl) {
+                    boxEl.className = '';
+                    boxEl.style.cssText = '';
+                    
+                    if (box.type === 'empty') {
+                        boxEl.className = 'aspect-square rounded-xl flex items-center justify-center bg-gray-200';
+                    } else {
+                        boxEl.className = 'aspect-square rounded-xl flex items-center justify-center bg-santu-pink/10 overflow-hidden';
+                        boxEl.innerHTML = `<img src="${box.image}" class="w-full h-full object-contain p-1" />`;
+                    }
+                    boxEl.style.pointerEvents = 'none';
+                }
+
+                document.querySelector('.text-2xl.font-bold.text-santu-yellow').textContent = score;
+
+                const remaining = blindBoxes.filter(b => !b.clicked).length;
+                if (remaining === 0) {
+                    const existingBtn = document.querySelector('.btn-glow');
+                    if (!existingBtn) {
+                        const finishBtn = document.createElement('button');
+                        finishBtn.className = 'px-8 py-3 rounded-2xl bg-gradient-to-r from-santu-pink to-pink-500 text-white font-bold btn-glow';
+                        finishBtn.onclick = () => finishLevel(1, score);
+                        finishBtn.innerHTML = '下一关 → 第2关';
+                        
+                        const container = document.querySelector('.grid.grid-cols-4');
+                        container.parentElement.appendChild(finishBtn);
+                        finishBtn.style.display = 'block';
+                        finishBtn.style.margin = '1rem auto';
+                        finishBtn.style.textAlign = 'center';
+                    }
+                }
+
+                if (timeLeft <= 0) {
+                    gameEnded = true;
+                    clearInterval(timer);
+                    setTimeout(() => finishLevel(1, score), 500);
+                }
+            }
+
+            render();
+            timer = setInterval(() => {
+                if (gameEnded) return;
+                timeLeft--;
+                document.getElementById('timerBar').style.width = `${(timeLeft / 5) * 100}%`;
+                document.getElementById('timerText').textContent = `${timeLeft}s`;
+
+                if (timeLeft <= 0) {
+                    gameEnded = true;
+                    clearInterval(timer);
+                    setTimeout(() => finishLevel(1, score), 500);
+                }
+            }, 1000);
+        }
+
+        // 渲染关卡2：百货物件分类收纳
+        function renderLevel2() {
+            const app = document.getElementById('app');
+            let score = 0;
+            let completedCount = 0;
+
+            const categories = [
+                { id: 'shangyi', name: '上衣', emoji: '👕', color: 'from-pink-400 to-pink-500', items: ['shangyi1.jpg', 'shangyi2.jpg', 'shangyi3.jpg', 'shangyi4.jpg'] },
+                { id: 'xiazhuang', name: '下装', emoji: '👖', color: 'from-blue-400 to-blue-500', items: ['xiazhuang1.jpg', 'xiazhuang2.jpg', 'xiazhuang3.jpg', 'xiazhuang4.jpg'] },
+                { id: 'bao', name: '包包', emoji: '👜', color: 'from-yellow-400 to-yellow-500', items: ['bao1.jpg', 'bao2.jpg', 'bao3.jpg', 'bao4.jpg'] }
+            ];
+
+            let items = [];
+            categories.forEach(cat => {
+                cat.items.forEach(item => {
+                    items.push({ id: `${cat.id}_${item}`, item, category: cat.id, placed: false, x: 0, y: 0 });
+                });
+            });
+
+            // 随机打乱
+            for (let i = items.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [items[i], items[j]] = [items[j], items[i]];
+            }
+
+            let draggedItem = null;
+            let dragOffset = { x: 0, y: 0 };
+
+            function render() {
+                app.innerHTML = `
+                    <div class="min-h-screen flex flex-col fade-in">
+                        <!-- 顶部状态栏 -->
+                        <div class="flex items-center justify-between px-4 py-3 bg-white/80 backdrop-blur sticky top-0 z-10">
+                            <button onclick="backToHome()" class="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
+                                <span class="text-gray-600">←</span>
+                            </button>
+                            <div class="text-center">
+                                <div class="text-sm text-gray-500">第2关</div>
+                                <div class="font-bold text-santu-pink">百货物件分类收纳</div>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-2xl font-bold text-santu-yellow">${score}</div>
+                                <div class="text-xs text-gray-500">积分</div>
+                            </div>
+                        </div>
+
+                        <div class="px-4 py-2 text-center text-gray-500 text-sm">
+                            将物品拖拽到对应分类框，全部归位即可通关！
+                        </div>
+
+                        <!-- 分类收纳框 -->
+                        <div class="grid grid-cols-3 gap-2 px-4 mb-4">
+                            ${categories.map(cat => `
+                                <div id="drop_${cat.id}"
+                                    class="h-24 rounded-xl bg-gradient-to-b ${cat.color} p-2 flex flex-col items-center justify-center"
+                                    ondragover="handleDragOver(event)" ondrop="handleDrop(event, '${cat.id}')">
+                                    <div class="text-2xl mb-1">${cat.emoji}</div>
+                                    <div class="text-white text-xs font-medium">${cat.name}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+
+                        <!-- 散落物品区 -->
+                        <div class="flex-1 px-4 pb-4">
+                            <div id="itemsArea" class="bg-gray-100 rounded-2xl p-4 min-h-48 flex flex-wrap gap-3 justify-center items-start content-start">
+                                ${items.filter(item => !item.placed).map(item => `
+                                    <div id="item_${item.id}"
+                                        class="w-16 h-16 bg-white rounded-xl flex items-center justify-center card-shadow cursor-grab active:cursor-grabbing transition-transform overflow-hidden"
+                                        draggable="true"
+                                        ontouchstart="handleTouchStart(event, '${item.id}')"
+                                        ontouchmove="handleTouchMove(event)"
+                                        ontouchend="handleTouchEnd(event)"
+                                        ondragstart="handleDragStart(event, '${item.id}')">
+                                        <img src="${item.item}" class="w-full h-full object-contain" />
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <!-- 进度 -->
+                        <div class="px-4 pb-4">
+                            <div class="h-2 bg-gray-200 rounded-full overflow-hidden">
+                                <div class="h-full bg-gradient-to-r from-santu-pink to-pink-400 transition-all" style="width: ${(completedCount / items.length) * 100}%"></div>
+                            </div>
+                            <div class="text-center text-sm text-gray-500 mt-1">${completedCount}/${items.length} 已归位</div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            window.handleDragStart = function(e, itemId) {
+                draggedItem = items.find(i => i.id === itemId);
+                e.dataTransfer.effectAllowed = 'move';
+            };
+
+            window.handleDragOver = function(e) {
+                e.preventDefault();
+            };
+
+            window.handleDrop = function(e, catId) {
+                e.preventDefault();
+                if (!draggedItem || draggedItem.placed) return;
+
+                if (draggedItem.category === catId) {
+                    AudioManager.success();
+                    draggedItem.placed = true;
+                    score += 15;
+                    completedCount++;
+                    render();
+                    checkComplete();
+                } else {
+                    // 弹回效果
+                    const el = document.getElementById(`item_${draggedItem.id}`);
+                    if (el) {
+                        el.classList.add('shake');
+                        setTimeout(() => el.classList.remove('shake'), 300);
+                    }
+                }
+            };
+
+            // 触摸事件支持
+            window.handleTouchStart = function(e, itemId) {
+                e.preventDefault();
+                draggedItem = items.find(i => i.id === itemId);
+                const touch = e.touches[0];
+                const el = document.getElementById(`item_${itemId}`);
+                const rect = el.getBoundingClientRect();
+                dragOffset.x = touch.clientX - rect.left;
+                dragOffset.y = touch.clientY - rect.top;
+                el.style.position = 'fixed';
+                el.style.zIndex = '100';
+                el.style.pointerEvents = 'none';
+            };
+
+            window.handleTouchMove = function(e) {
+                if (!draggedItem) return;
+                e.preventDefault();
+                const touch = e.touches[0];
+                const el = document.getElementById(`item_${draggedItem.id}`);
+                el.style.left = (touch.clientX - dragOffset.x) + 'px';
+                el.style.top = (touch.clientY - dragOffset.y) + 'px';
+            };
+
+            window.handleTouchEnd = function(e) {
+                if (!draggedItem || draggedItem.placed) return;
+                const touch = e.changedTouches[0];
+                const el = document.getElementById(`item_${draggedItem.id}`);
+
+                // 检查是否落在某个分类框上
+                categories.forEach(cat => {
+                    const dropZone = document.getElementById(`drop_${cat.id}`);
+                    const rect = dropZone.getBoundingClientRect();
+                    if (touch.clientX >= rect.left && touch.clientX <= rect.right &&
+                        touch.clientY >= rect.top && touch.clientY <= rect.bottom) {
+                        if (draggedItem.category === cat.id) {
+                            draggedItem.placed = true;
+                            score += 15;
+                            completedCount++;
+                            render();
+                            checkComplete();
+                        } else {
+                            el.classList.add('shake');
+                            setTimeout(() => el.classList.remove('shake'), 300);
+                            el.style.position = '';
+                            el.style.zIndex = '';
+                            el.style.pointerEvents = '';
+                            el.style.left = '';
+                            el.style.top = '';
+                        }
+                    }
+                });
+
+                if (draggedItem && !draggedItem.placed) {
+                    el.style.position = '';
+                    el.style.zIndex = '';
+                    el.style.pointerEvents = '';
+                    el.style.left = '';
+                    el.style.top = '';
+                }
+            };
+
+            function checkComplete() {
+                if (completedCount >= items.length) {
+                    setTimeout(() => finishLevel(2, score), 500);
+                }
+            }
+
+            render();
+        }
+
+        // 渲染关卡3：好物记忆翻翻卡
+        function renderLevel3() {
+            const app = document.getElementById('app');
+            let score = 0;
+            let flippedCards = [];
+            let matchedPairs = 0;
+            let canFlip = true;
+
+            const cardTypes = [
+                { id: 'fagu', image: 'fagu.png', name: '发箍', desc: '甜美可爱，百搭神器' },
+                { id: 'fajia', image: 'fajia.png', name: '发夹', desc: '精致优雅，点缀秀发' },
+                { id: 'erding', image: 'erding.png', name: '耳钉', desc: '闪亮动人，气质加分' },
+                { id: 'jiezhi', image: 'jiezhi.png', name: '戒指', desc: '时尚个性，彰显品味' },
+                { id: 'xianglian', image: 'xianglian.png', name: '项链', desc: '优雅大方，魅力无限' },
+                { id: 'shoulian', image: 'shoulian.png', name: '手链', desc: '精致小巧，腕间风情' }
+            ];
+
+            // 生成卡片对
+            let cards = [];
+            cardTypes.forEach(type => {
+                cards.push({ ...type, uniqueId: type.id + '_1' });
+                cards.push({ ...type, uniqueId: type.id + '_2' });
+            });
+
+            // 随机打乱
+            for (let i = cards.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [cards[i], cards[j]] = [cards[j], cards[i]];
+            }
+
+            function render() {
+                app.innerHTML = `
+                    <div class="min-h-screen flex flex-col fade-in">
+                        <!-- 顶部状态栏 -->
+                        <div class="flex items-center justify-between px-4 py-3 bg-white/80 backdrop-blur sticky top-0 z-10">
+                            <button onclick="backToHome()" class="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
+                                <span class="text-gray-600">←</span>
+                            </button>
+                            <div class="text-center">
+                                <div class="text-sm text-gray-500">第3关</div>
+                                <div class="font-bold text-santu-pink">好物记忆翻翻卡</div>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-2xl font-bold text-santu-yellow">${score}</div>
+                                <div class="text-xs text-gray-500">积分</div>
+                            </div>
+                        </div>
+
+                        <div class="px-4 py-2 text-center text-gray-500 text-sm">
+                            翻开相同卡片即可消除，全部配对完成通关！
+                        </div>
+
+                        <!-- 卡片网格 -->
+                        <div class="flex-1 px-4 pb-4">
+                            <div class="grid grid-cols-4 gap-2 max-w-sm mx-auto">
+                                ${cards.map((card, i) => `
+                                    <div id="card_${i}"
+                                        class="aspect-square flip-card cursor-pointer"
+                                        onclick="flipCard(${i})">
+                                        <div class="flip-card-inner relative w-full h-full">
+                                            <div class="flip-card-front bg-gradient-to-br from-santu-pink to-pink-400 rounded-xl flex items-center justify-center">
+                                                <span class="text-2xl">🎴</span>
+                                            </div>
+                                            <div class="flip-card-back bg-white rounded-xl flex items-center justify-center card-shadow overflow-hidden">
+                                                <img src="${card.image}" class="w-full h-full object-contain p-1" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <!-- 进度 -->
+                        <div class="px-4 pb-4">
+                            <div class="h-2 bg-gray-200 rounded-full overflow-hidden">
+                                <div class="h-full bg-gradient-to-r from-santu-pink to-pink-400 transition-all" style="width: ${(matchedPairs / cardTypes.length) * 100}%"></div>
+                            </div>
+                            <div class="text-center text-sm text-gray-500 mt-1">${matchedPairs}/${cardTypes.length} 对配对</div>
+                        </div>
+
+                        <!-- 种草弹窗 -->
+                        <div id="matchModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden">
+                            <div class="bg-white rounded-3xl p-6 mx-4 max-w-xs w-full slide-up">
+                                <div class="text-center">
+                                    <div id="matchEmoji" class="text-5xl mb-3">🧸</div>
+                                    <div id="matchName" class="text-xl font-bold text-gray-800 mb-1">毛绒挂件</div>
+                                    <div id="matchDesc" class="text-gray-500 text-sm mb-4">软萌可爱，陪你入睡</div>
+                                    <div class="text-santu-yellow font-bold text-lg">+25积分</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            window.flipCard = function(index) {
+                if (!canFlip) return;
+                const cardEl = document.getElementById(`card_${index}`);
+                if (cardEl.classList.contains('flipped')) return;
+                if (flippedCards.length >= 2) return;
+
+                AudioManager.click();
+                cardEl.classList.add('flipped');
+                flippedCards.push({ index, card: cards[index] });
+
+                if (flippedCards.length === 2) {
+                    canFlip = false;
+                    const [first, second] = flippedCards;
+
+                    if (first.card.id === second.card.id) {
+                        // 配对成功
+                        setTimeout(() => {
+                            AudioManager.success();
+                            showMatchModal(first.card);
+                            score += 25;
+                            matchedPairs++;
+                            
+                            // 移除匹配成功的卡片
+                            document.getElementById(`card_${first.index}`).style.opacity = '0';
+                            document.getElementById(`card_${first.index}`).style.pointerEvents = 'none';
+                            document.getElementById(`card_${second.index}`).style.opacity = '0';
+                            document.getElementById(`card_${second.index}`).style.pointerEvents = 'none';
+                            
+                            // 更新分数和进度
+                            document.querySelector('.text-2xl.font-bold.text-santu-yellow').textContent = score;
+                            document.querySelector('.h-full.bg-gradient-to-r.from-santu-pink.to-pink-400').style.width = `${(matchedPairs / cardTypes.length) * 100}%`;
+                            
+                            flippedCards = [];
+                            canFlip = true;
+                            
+                            if (matchedPairs >= cardTypes.length) {
+                                setTimeout(() => finishLevel(3, score), 500);
+                            }
+                        }, 300);
+                    } else {
+                        // 配对失败，翻回
+                        setTimeout(() => {
+                            document.getElementById(`card_${first.index}`).classList.remove('flipped');
+                            document.getElementById(`card_${second.index}`).classList.remove('flipped');
+                            flippedCards = [];
+                            canFlip = true;
+                        }, 800);
+                    }
+                }
+            };
+
+            function showMatchModal(card) {
+                const modal = document.getElementById('matchModal');
+                document.getElementById('matchEmoji').textContent = card.emoji;
+                document.getElementById('matchName').textContent = card.name;
+                document.getElementById('matchDesc').textContent = card.desc;
+                modal.classList.remove('hidden');
+                setTimeout(() => modal.classList.add('hidden'), 1500);
+            }
+
+            render();
+        }
+
+        // 渲染关卡4：礼品礼盒拼装拼图
+        function renderLevel4() {
+            const app = document.getElementById('app');
+            let score = 0;
+            let placedCount = 0;
+            let draggedPiece = null;
+            let dragOffset = { x: 0, y: 0 };
+            const snapThreshold = 60;
+
+            const puzzlePieces = [
+                { id: 0, targetX: 0, targetY: 0, bgPosX: '0%', bgPosY: '0%' },
+                { id: 1, targetX: 1, targetY: 0, bgPosX: '50%', bgPosY: '0%' },
+                { id: 2, targetX: 2, targetY: 0, bgPosX: '100%', bgPosY: '0%' },
+                { id: 3, targetX: 0, targetY: 1, bgPosX: '0%', bgPosY: '50%' },
+                { id: 4, targetX: 1, targetY: 1, bgPosX: '50%', bgPosY: '50%' },
+                { id: 5, targetX: 2, targetY: 1, bgPosX: '100%', bgPosY: '50%' },
+                { id: 6, targetX: 0, targetY: 2, bgPosX: '0%', bgPosY: '100%' },
+                { id: 7, targetX: 1, targetY: 2, bgPosX: '50%', bgPosY: '100%' },
+                { id: 8, targetX: 2, targetY: 2, bgPosX: '100%', bgPosY: '100%' }
+            ];
+
+            let pieces = [...puzzlePieces];
+            for (let i = pieces.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [pieces[i], pieces[j]] = [pieces[j], pieces[i]];
+            }
+
+            app.innerHTML = `
+                <div class="min-h-screen flex flex-col fade-in" id="level4-container">
+                    <div class="flex items-center justify-between px-4 py-3 bg-white/80 backdrop-blur sticky top-0 z-10">
+                        <button onclick="backToHome()" class="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
+                            <span class="text-gray-600">←</span>
+                        </button>
+                        <div class="text-center">
+                            <div class="text-sm text-gray-500">第4关</div>
+                            <div class="font-bold text-santu-pink">礼品礼盒拼装拼图</div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-2xl font-bold text-santu-yellow" id="level4-score">${score}</div>
+                            <div class="text-xs text-gray-500">积分</div>
+                        </div>
+                    </div>
+
+                    <div class="px-4 py-2 text-center text-gray-500 text-sm">
+                        拖拽碎片到目标位置，完整拼出礼盒即可通关！
+                    </div>
+
+                    <div class="px-4 mb-4">
+                        <div id="puzzleTarget" class="bg-gray-100 rounded-2xl p-2 aspect-square relative">
+                            <!-- 参考图背景 -->
+                            <div class="absolute inset-2 rounded-xl overflow-hidden opacity-30">
+                                <img src="lipindai.jpg" class="w-full h-full object-contain" />
+                            </div>
+                            <div class="grid grid-cols-3 gap-1 h-full relative z-10">
+                                ${puzzlePieces.map(p => `
+                                    <div id="target_${p.id}" class="bg-white/50 border-2 border-dashed border-gray-300 rounded-lg"></div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex-1 px-4 pb-4">
+                        <div class="bg-pink-50 rounded-2xl p-4 min-h-40">
+                            <div class="flex flex-wrap gap-2 justify-center" id="pieces-container">
+                                ${pieces.map(p => `
+                                    <div id="piece_${p.id}" 
+                                        class="w-16 h-16 rounded-lg card-shadow cursor-grab active:cursor-grabbing transition-all"
+                                        style="background-image: url('lipindai.jpg'); background-position: ${p.bgPosX} ${p.bgPosY}; background-size: 300% 300%; background-repeat: no-repeat;">
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="px-4 pb-4">
+                        <div class="h-2 bg-gray-200 rounded-full overflow-hidden">
+                            <div class="h-full bg-gradient-to-r from-santu-pink to-pink-400 transition-all" id="level4-progress" style="width: ${(placedCount / puzzlePieces.length) * 100}%"></div>
+                        </div>
+                        <div class="text-center text-sm text-gray-500 mt-1" id="level4-count">${placedCount}/${puzzlePieces.length} 块已放置</div>
+                    </div>
+                </div>
+            `;
+
+            pieces.forEach(piece => {
+                const el = document.getElementById(`piece_${piece.id}`);
+                if (el) {
+                    el.addEventListener('mousedown', (e) => startDrag(e, piece));
+                    el.addEventListener('touchstart', (e) => startDrag(e, piece));
+                }
+            });
+
+            function startDrag(e, piece) {
+                e.preventDefault();
+                if (piece.placed) return;
+                
+                draggedPiece = piece;
+                const touch = e.touches ? e.touches[0] : e;
+                const el = document.getElementById(`piece_${piece.id}`);
+                const rect = el.getBoundingClientRect();
+                
+                dragOffset.x = touch.clientX - rect.left;
+                dragOffset.y = touch.clientY - rect.top;
+                
+                el.style.position = 'fixed';
+                el.style.zIndex = '1000';
+                el.style.pointerEvents = 'none';
+                el.style.left = (touch.clientX - dragOffset.x) + 'px';
+                el.style.top = (touch.clientY - dragOffset.y) + 'px';
+                el.style.transform = 'scale(1.15)';
+                el.style.boxShadow = '0 8px 20px rgba(0,0,0,0.2)';
+                
+                document.addEventListener('mousemove', onDrag);
+                document.addEventListener('mouseup', stopDrag);
+                document.addEventListener('touchmove', onDrag);
+                document.addEventListener('touchend', stopDrag);
+            }
+
+            function onDrag(e) {
+                if (!draggedPiece) return;
+                e.preventDefault();
+                
+                const touch = e.touches ? e.touches[0] : e;
+                const el = document.getElementById(`piece_${draggedPiece.id}`);
+                
+                el.style.left = (touch.clientX - dragOffset.x) + 'px';
+                el.style.top = (touch.clientY - dragOffset.y) + 'px';
+            }
+
+            function stopDrag(e) {
+                if (!draggedPiece) return;
+                
+                const touch = e.changedTouches ? e.changedTouches[0] : e;
+                const el = document.getElementById(`piece_${draggedPiece.id}`);
+                
+                const container = document.getElementById('puzzleTarget');
+                if (container) {
+                    const rect = container.getBoundingClientRect();
+                    const pieceWidth = rect.width / 3;
+                    const pieceHeight = rect.height / 3;
+                    
+                    const targetX = Math.floor((touch.clientX - rect.left) / pieceWidth);
+                    const targetY = Math.floor((touch.clientY - rect.top) / pieceHeight);
+                    
+                    if (targetX >= 0 && targetX < 3 && targetY >= 0 && targetY < 3) {
+                        const targetIndex = targetY * 3 + targetX;
+                        
+                        if (targetIndex === draggedPiece.id && !draggedPiece.placed) {
+                            AudioManager.success();
+                            draggedPiece.placed = true;
+                            placedCount++;
+                            score += Math.floor(50 / puzzlePieces.length);
+                            
+                            el.style.display = 'none';
+                            
+                            const targetEl = document.getElementById(`target_${draggedPiece.id}`);
+                            if (targetEl) {
+                                targetEl.innerHTML = `<div class="w-full h-full rounded-lg" style="background-image: url('lipindai.jpg'); background-position: ${draggedPiece.bgPosX} ${draggedPiece.bgPosY}; background-size: 300% 300%; background-repeat: no-repeat;"></div>`;
+                                targetEl.style.border = 'none';
+                                targetEl.style.background = 'none';
+                            }
+                            
+                            document.getElementById('level4-score').textContent = score;
+                            document.getElementById('level4-progress').style.width = `${(placedCount / puzzlePieces.length) * 100}%`;
+                            document.getElementById('level4-count').textContent = `${placedCount}/${puzzlePieces.length} 块已放置`;
+                            
+                            if (placedCount >= puzzlePieces.length) {
+                                setTimeout(() => finishLevel(4, score), 500);
+                            }
+                            draggedPiece = null;
+                            cleanupEvents();
+                            return;
+                        }
+                    }
+                }
+                
+                el.style.position = '';
+                el.style.zIndex = '';
+                el.style.pointerEvents = '';
+                el.style.transform = '';
+                el.style.left = '';
+                el.style.top = '';
+                el.style.boxShadow = '';
+                draggedPiece = null;
+                cleanupEvents();
+            }
+
+            function cleanupEvents() {
+                document.removeEventListener('mousemove', onDrag);
+                document.removeEventListener('mouseup', stopDrag);
+                document.removeEventListener('touchmove', onDrag);
+                document.removeEventListener('touchend', stopDrag);
+            }
+        }
+
+        // 完成关卡
+        function finishLevel(level, score) {
+            gameState.scores[level - 1] = score;
+            if (level < 4) {
+                gameState.levelUnlocked[level + 1] = true;
+            }
+
+            const app = document.getElementById('app');
+            const popup = document.createElement('div');
+            popup.className = 'fixed inset-0 bg-black/50 flex items-center justify-center z-50 fade-in';
+            popup.innerHTML = `
+                <div class="bg-white rounded-3xl p-6 mx-4 max-w-sm w-full text-center transform animate-bounce-in">
+                    <div class="text-6xl mb-4">🎉</div>
+                    <h2 class="text-2xl font-bold text-gray-800 mb-2">恭喜你闯关成功！</h2>
+                    <p class="text-gray-500 mb-4">第${level}关完成，获得 <span class="text-santu-yellow font-bold text-xl">+${score}</span> 积分</p>
+                    <div class="flex flex-col gap-3">
+                        <button onclick="${level < 4 ? `closePopup(); navigate('#level${level + 1}')` : `closePopup(); navigate('#result')`}" 
+                                class="w-full px-8 py-4 rounded-xl bg-gradient-to-r from-santu-pink to-pink-500 text-white font-bold text-xl shadow-lg shadow-pink-500/30 hover:shadow-xl hover:shadow-pink-500/40 transition-all duration-300 active:scale-95 flex items-center justify-center gap-2">
+                            <span>${level < 4 ? '🎮' : '🏆'}</span>
+                            <span>${level < 4 ? '下一关' : '查看结果'}</span>
+                            <span>${level < 4 ? '→ 第' + (level + 1) + '关' : ''}</span>
+                        </button>
+                        <button onclick="closePopup(); navigate('#home')" class="w-full px-6 py-3 rounded-xl bg-gray-100 text-gray-600 font-medium hover:bg-gray-200 transition-colors">
+                            🏠 返回首页
+                        </button>
+                    </div>
+                </div>
+            `;
+            app.appendChild(popup);
+        }
+
+        function closePopup() {
+            const popup = document.querySelector('.fixed.inset-0.bg-black\\/50');
+            if (popup) {
+                popup.remove();
+            }
+        }
+
+        // 返回首页
+        function backToHome() {
+            navigate('#home');
+        }
+
+        // 渲染结算页
+        function renderResult() {
+            const app = document.getElementById('app');
+
+            // 计算总积分
+            gameState.totalScore = gameState.scores.reduce((a, b) => a + b, 0);
+
+            // 等级评定
+            if (gameState.totalScore >= 200) {
+                gameState.grade = 'S';
+            } else if (gameState.totalScore >= 150) {
+                gameState.grade = 'A';
+            } else if (gameState.totalScore >= 100) {
+                gameState.grade = 'B';
+            } else {
+                gameState.grade = 'C';
+            }
+
+            // 优惠券码
+            gameState.couponCode = 'SF' + Math.random().toString(36).substr(2, 8).toUpperCase();
+
+            const couponInfo = {
+                'S': { threshold: 99, discount: 30, name: '满99减30' },
+                'A': { threshold: 79, discount: 20, name: '满79减20' },
+                'B': { threshold: 59, discount: 15, name: '满59减15' },
+                'C': { threshold: 39, discount: 10, name: '满39减10' }
+            };
+
+            const coupon = couponInfo[gameState.grade];
+
+            app.innerHTML = `
+                <div class="min-h-screen flex flex-col fade-in">
+                    <!-- 顶部装饰 -->
+                    <div class="h-32 bg-gradient-to-b from-santu-pink to-pink-300 rounded-b-[3rem] flex items-center justify-center">
+                        <div class="text-center text-white">
+                            <div class="text-sm opacity-80">恭喜完成全部关卡</div>
+                            <div class="text-2xl font-bold">潮流人设已生成</div>
+                        </div>
+                    </div>
+
+                    <!-- 海报卡片 -->
+                    <div class="px-4 -mt-8 relative z-10">
+                        <div class="bg-white rounded-3xl p-4 card-shadow">
+                            <div class="aspect-[3/4] bg-gradient-to-br from-pink-100 to-yellow-100 rounded-2xl p-4 flex flex-col items-center justify-center">
+                                <!-- 海报内容 -->
+                                <div class="text-center">
+                                    <div class="w-20 h-20 rounded-full bg-gradient-to-br from-santu-pink to-yellow-400 mx-auto mb-3 flex items-center justify-center overflow-hidden">
+                                        <img src="xiaofu.png" class="w-full h-full object-contain p-2" />
+                                    </div>
+                                    <div class="text-xl font-bold text-gray-800 mb-1">三福好物探索家</div>
+                                    <div class="text-santu-pink font-medium mb-4">${gameState.grade}级潮流达人</div>
+
+                                    <div class="flex justify-center gap-4 mb-4">
+                                        ${gameState.scores.map((s, i) => `
+                                            <div class="text-center">
+                                                <div class="text-lg font-bold text-santu-yellow">${s}</div>
+                                                <div class="text-xs text-gray-500">关${i + 1}</div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+
+                                    <div class="text-3xl font-bold text-santu-pink mb-1">${gameState.totalScore}</div>
+                                    <div class="text-sm text-gray-500">总积分</div>
+
+                                    <div class="mt-4 py-2 px-4 bg-santu-pink/10 rounded-full inline-block">
+                                        <span class="text-santu-pink font-medium">SANFU 三福</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 按钮组 -->
+                            <div class="mt-4 space-y-3">
+                                <button onclick="downloadPoster()" class="w-full py-3 rounded-2xl bg-gradient-to-r from-santu-pink to-pink-500 text-white font-bold btn-glow">
+                                    保存海报到相册
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 优惠券区域 -->
+                    <div class="px-4 mt-4 mb-4">
+                        <div class="bg-white rounded-3xl p-4 card-shadow">
+                            <div class="flex items-center gap-3 mb-3">
+                                <div class="w-12 h-12 rounded-xl bg-santu-yellow/20 flex items-center justify-center">
+                                    <span class="text-2xl">🎫</span>
+                                </div>
+                                <div>
+                                    <div class="font-bold text-gray-800">专属优惠券</div>
+                                    <div class="text-sm text-gray-500">线下门店可用</div>
+                                </div>
+                            </div>
+
+                            <div class="bg-gradient-to-r from-santu-pink/5 to-santu-yellow/5 rounded-2xl p-4">
+                                <div class="text-center mb-3">
+                                    <div class="text-2xl font-bold text-santu-pink">${coupon.name}</div>
+                                </div>
+                                <div class="flex items-center justify-between bg-white rounded-xl p-3">
+                                    <div>
+                                        <div class="text-xs text-gray-500">优惠券码</div>
+                                        <div class="font-mono font-bold text-lg text-santu-pink">${gameState.couponCode}</div>
+                                    </div>
+                                    <button onclick="copyCoupon()" class="px-4 py-2 bg-santu-pink text-white rounded-lg text-sm font-medium">
+                                        复制
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 分享区域 -->
+                    <div class="px-4 pb-6">
+                        <div class="text-center text-gray-500 text-sm mb-3">分享给好友，一起参与</div>
+                        <button onclick="shareGame()" class="w-full py-3 rounded-2xl bg-gradient-to-r from-santu-yellow to-yellow-400 text-gray-800 font-bold">
+                            分享到好友圈 👏
+                        </button>
+                    </div>
+
+                    <!-- 重新挑战 -->
+                    <div class="px-4 pb-6">
+                        <button onclick="restartGame()" class="w-full py-3 rounded-2xl border-2 border-santu-pink text-santu-pink font-bold">
+                            重新挑战
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            // 生成海报到canvas（用于下载）
+            generatePosterCanvas();
+        }
+
+        // 生成海报Canvas
+        function generatePosterCanvas() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 600;
+            canvas.height = 800;
+            const ctx = canvas.getContext('2d');
+
+            // 背景渐变
+            const gradient = ctx.createLinearGradient(0, 0, 600, 800);
+            gradient.addColorStop(0, '#FF4D88');
+            gradient.addColorStop(1, '#FFD124');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 600, 800);
+
+            // 白色卡片
+            ctx.fillStyle = '#FFFFFF';
+            ctx.beginPath();
+            ctx.roundRect(40, 80, 520, 640, 40);
+            ctx.fill();
+
+            // 图标背景圆
+            const iconGradient = ctx.createLinearGradient(220, 70, 380, 230);
+            iconGradient.addColorStop(0, '#FF4D88');
+            iconGradient.addColorStop(1, '#FFD124');
+            ctx.fillStyle = iconGradient;
+            ctx.beginPath();
+            ctx.arc(300, 120, 60, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 绘制xiaofu图片
+            const img = new Image();
+            img.onload = function() {
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(300, 120, 50, 0, Math.PI * 2);
+                ctx.clip();
+                ctx.drawImage(img, 250, 70, 100, 100);
+                ctx.restore();
+            };
+            img.onerror = function() {
+                ctx.font = '48px sans-serif';
+                ctx.fillStyle = '#FFFFFF';
+                ctx.textAlign = 'center';
+                ctx.fillText('🎁', 300, 135);
+            };
+            img.src = 'xiaofu.png';
+
+            // 标题
+            ctx.fillStyle = '#333333';
+            ctx.font = 'bold 36px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('三福好物探索家', 300, 220);
+
+            // 等级
+            ctx.fillStyle = '#FF4D88';
+            ctx.font = 'bold 28px sans-serif';
+            ctx.fillText(` ${gameState.grade}级潮流达人`, 300, 270);
+
+            // 各关积分
+            ctx.font = '24px sans-serif';
+            ctx.fillStyle = '#666666';
+            let y = 340;
+            gameState.scores.forEach((s, i) => {
+                ctx.fillText(`第${i + 1}关: ${s}分`, 300, y);
+                y += 40;
+            });
+
+            // 总积分
+            ctx.font = 'bold 48px sans-serif';
+            ctx.fillStyle = '#FF4D88';
+            ctx.fillText(`${gameState.totalScore}`, 300, 560);
+            ctx.font = '20px sans-serif';
+            ctx.fillStyle = '#999999';
+            ctx.fillText('总积分', 300, 600);
+
+            // 品牌
+            ctx.fillStyle = '#FF4D88';
+            ctx.font = 'bold 24px sans-serif';
+            ctx.fillText('SANFU 三福', 300, 690);
+
+            // 底部提示
+            ctx.fillStyle = '#999999';
+            ctx.font = '16px sans-serif';
+            ctx.fillText('好物集结闯关计划', 300, 740);
+
+            // 保存canvas引用供下载使用
+            window.posterCanvas = canvas;
+        }
+
+        // 下载海报
+        function downloadPoster() {
+            if (window.posterCanvas) {
+                const link = document.createElement('a');
+                link.download = '三福好物探索家海报.png';
+                link.href = window.posterCanvas.toDataURL('image/png');
+                link.click();
+            }
+        }
+
+        // 复制优惠券
+        function copyCoupon() {
+            navigator.clipboard.writeText(gameState.couponCode).then(() => {
+                alert('优惠券码已复制到剪贴板！');
+            }).catch(() => {
+                alert('复制失败，请手动复制：' + gameState.couponCode);
+            });
+        }
+
+        // 分享游戏
+        function shareGame() {
+            const shareData = {
+                title: '三福好物集结闯关计划',
+                text: `我在三福闯关中获得${gameState.grade}级评价，总积分${gameState.totalScore}！你也来试试吧~`,
+                url: window.location.href.split('#')[0]
+            };
+
+            if (navigator.share) {
+                navigator.share(shareData).catch(() => {});
+            } else {
+                // 不支持分享则复制链接
+                navigator.clipboard.writeText(window.location.href).then(() => {
+                    alert('分享链接已复制到剪贴板！');
+                });
+            }
+        }
+
+        // 重新挑战
+        function restartGame() {
+            gameState.currentLevel = 0;
+            gameState.levelUnlocked = [true, false, false, false, false];
+            gameState.scores = [0, 0, 0, 0];
+            gameState.totalScore = 0;
+            gameState.grade = 'C';
+            navigate('#home');
+        }
+
+        // 路由处理
+        function handleRoute() {
+            const hash = window.location.hash || '#home';
+            switch (hash) {
+                case '#home':
+                    renderHome();
+                    break;
+                case '#level1':
+                    renderLevel1();
+                    break;
+                case '#level2':
+                    renderLevel2();
+                    break;
+                case '#level3':
+                    renderLevel3();
+                    break;
+                case '#level4':
+                    renderLevel4();
+                    break;
+                case '#result':
+                    renderResult();
+                    break;
+                default:
+                    renderHome();
+            }
+        }
+
+        // 监听路由变化
+        window.addEventListener('hashchange', handleRoute);
+
+        // 初始化
+        handleRoute();
+    </script>
+</body>
+</html>
